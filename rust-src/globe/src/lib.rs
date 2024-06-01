@@ -27,11 +27,11 @@ pub extern "C" fn greet() {
     println!("Hello from Rust! -globe");
 
     let settings = Settings {
-        refresh_rate: 120,
-        globe_rotation_speed: 0.01, // Adjust this as needed
-        cam_rotation_speed: 0.0,    // Adjust this as needed
-        cam_zoom: 0.1,              // Adjust this as needed
-        focus_speed: 1.0,           // Adjust this as needed
+        refresh_rate: 60,
+        globe_rotation_speed: 0.001, // Adjust this as needed
+        cam_rotation_speed: 0.0,     // Adjust this as needed
+        cam_zoom: 0.1,               // Adjust this as needed
+        focus_speed: 1.0,            // Adjust this as needed
         night: false,
         coords: (35.0, 139.0), // Adjust this as needed
     };
@@ -44,6 +44,7 @@ fn my_screensaver(settings: Settings) {
     let mut term_size = terminal::size().unwrap();
 
     // use config builder to create a new globe struct
+    /*
     let mut globe = GlobeConfig::new()
         // specify path to the texture file
         .with_texture(EARTH_TEXTURE, None)
@@ -51,9 +52,17 @@ fn my_screensaver(settings: Settings) {
         //.use_template(GlobeTemplate::Earth)
         .with_camera(CameraConfig::default())
         .build();
+    */
+
+    let mut globe = GlobeConfig::new()
+        //.use_template(GlobeTemplate::Earth)
+        .with_texture(EARTH_NIGHT_TEXTURE, None)
+        .with_camera(CameraConfig::default())
+        .display_night(settings.night)
+        .build();
 
     // create a new canvas
-    //let mut canvas = Canvas::new(term_size.0 * 8, term_size.1 * 8, None);
+    //let mut canvas = Canvas::new(250, 250, None);
     let mut canvas = if term_size.0 > term_size.1 {
         Canvas::new(term_size.1 * 8, term_size.1 * 8, None)
     } else {
