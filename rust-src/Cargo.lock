@@ -84,6 +84,9 @@ dependencies = [
 [[package]]
 name = "globe"
 version = "0.2.0"
+dependencies = [
+ "crossterm",
+]
 
 [[package]]
 name = "globe-cli"

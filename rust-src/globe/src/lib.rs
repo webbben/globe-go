@@ -6,13 +6,133 @@
 
 use std::f32::consts::PI;
 use std::fs::File;
-use std::io::Read;
+
+use std::io::{stdout, Read, Stdout, Write};
+use std::time::Duration;
+
+use crossterm::terminal;
+use crossterm::{
+    cursor,
+    event::{poll, read, Event},
+    style::Print,
+    ExecutableCommand, QueueableCommand,
+};
+
+use crossterm::terminal::ClearType;
+
+use std::thread;
+
+#[no_mangle]
+pub extern "C" fn greet() {
+    println!("Hello from Rust! -globe");
+
+    let settings = Settings {
+        refresh_rate: 120,
+        globe_rotation_speed: 0.01, // Adjust this as needed
+        cam_rotation_speed: 0.0,    // Adjust this as needed
+        cam_zoom: 0.1,              // Adjust this as needed
+        focus_speed: 1.0,           // Adjust this as needed
+        night: false,
+        coords: (35.0, 139.0), // Adjust this as needed
+    };
+
+    //start_screensaver(settings);
+    my_screensaver(settings)
+}
+
+fn my_screensaver(settings: Settings) {
+    let mut term_size = terminal::size().unwrap();
+
+    // use config builder to create a new globe struct
+    let mut globe = GlobeConfig::new()
+        // specify path to the texture file
+        .with_texture(EARTH_TEXTURE, None)
+        // for built-in textures try using a template
+        //.use_template(GlobeTemplate::Earth)
+        .with_camera(CameraConfig::default())
+        .build();
+
+    // create a new canvas
+    //let mut canvas = Canvas::new(term_size.0 * 8, term_size.1 * 8, None);
+    let mut canvas = if term_size.0 > term_size.1 {
+        Canvas::new(term_size.1 * 8, term_size.1 * 8, None)
+    } else {
+        Canvas::new(term_size.0 * 4, term_size.0 * 4, None)
+    };
+    let mut cam_xy = 0.;
+    let mut cam_z = 0.;
+
+    // render the globe onto the canvas
+    //globe.render_on(&mut canvas);
+
+    // ...
+
+    loop {
+        if poll(Duration::from_millis(1000 / settings.refresh_rate as u64)).unwrap() {
+            match read().unwrap() {
+                // pressing any key exists the program
+                Event::Key(_) => break,
+                Event::Resize(width, height) => {
+                    term_size = (width, height);
+                    canvas = if width > height {
+                        Canvas::new(height * 8, height * 8, None)
+                    } else {
+                        Canvas::new(width * 4, width * 4, None)
+                    };
+                }
+                Event::Mouse(_) => (),
+            }
+        }
+
+        // apply globe rotation
+        globe.angle += settings.globe_rotation_speed;
+        //cam_xy -= settings.globe_rotation_speed / 2.;
+
+        // apply camera rotation
+        //cam_xy -= settings.cam_rotation_speed;
+
+        //globe.camera.update(settings.cam_zoom, cam_xy, cam_z);
+
+        // render globe on the canvas
+        canvas.clear();
+        globe.render_on(&mut canvas);
+
+        // print out the canvas
+        let (size_x, size_y) = canvas.get_size();
+        for i in 0..size_y / 8 {
+            for j in 0..size_x / 4 {
+                print!("{}", canvas.matrix[i][j]);
+            }
+            println!();
+        }
+        //thread::sleep(Duration::from_secs(1));
+    }
+}
 
 pub type Int = isize;
 pub type Float = f32;
 
 static EARTH_TEXTURE: &str = include_str!("../textures/earth.txt");
 static EARTH_NIGHT_TEXTURE: &str = include_str!("../textures/earth_night.txt");
+
+/// Collection of scene settings that get passed from clap to mode processing
+/// functions.
+struct Settings {
+    /// Refresh rate in cycles per second
+    refresh_rate: usize,
+    /// Initial globe rotation speed
+    globe_rotation_speed: f32,
+    /// Initial camera rotation speed
+    cam_rotation_speed: f32,
+    /// Initial camera zoom
+    cam_zoom: f32,
+    /// Target focus speed
+    focus_speed: f32,
+    /// Globe night side switch
+    night: bool,
+    /// Initial location coordinates
+    coords: (f32, f32),
+}
 
 /// Globe texture.
 pub struct Texture {
@@ -598,4 +718,112 @@ fn clamp(mut x: Float, min: Float, max: Float) -> Float {
         x = max;
     }
     x
+}
+
+/// Screensaver mode doesn't allow for user input. Any key press exits the
+/// program.
+fn start_screensaver(settings: Settings) {
+    terminal::enable_raw_mode().unwrap();
+    let mut stdout = stdout();
+    stdout.execute(cursor::Hide).unwrap();
+    stdout.execute(cursor::DisableBlinking).unwrap();
+
+    let mut term_size = terminal::size().unwrap();
+
+    let mut canvas = if term_size.0 > term_size.1 {
+        Canvas::new(term_size.1 * 8, term_size.1 * 8, None)
+    } else {
+        Canvas::new(term_size.0 * 4, term_size.0 * 4, None)
+    };
+
+    let cam_zoom = settings.cam_zoom;
+    let mut cam_xy = 0.;
+    let mut cam_z = 0.;
+
+    // set the initial coordinates
+    focus_target(settings.coords, 0., &mut cam_xy, &mut cam_z);
+
+    let mut globe = GlobeConfig::new()
+        .use_template(GlobeTemplate::Earth)
+        .with_camera(CameraConfig::new(cam_zoom, cam_xy, cam_z))
+        .display_night(settings.night)
+        .build();
+
+    let globe_rot_speed = settings.globe_rotation_speed / 1000.;
+    let cam_rot_speed = settings.cam_rotation_speed / 1000.;
+
+    loop {
+        if poll(Duration::from_millis(1000 / settings.refresh_rate as u64)).unwrap() {
+            match read().unwrap() {
+                // pressing any key exists the program
+                Event::Key(_) => break,
+                Event::Resize(width, height) => {
+                    term_size = (width, height);
+                    canvas = if width > height {
+                        Canvas::new(height * 8, height * 8, None)
+                    } else {
+                        Canvas::new(width * 4, width * 4, None)
+                    };
+                }
+                Event::Mouse(_) => (),
+            }
+        }
+
+        // apply globe rotation
+        globe.angle += globe_rot_speed;
+        cam_xy -= globe_rot_speed / 2.;
+
+        // apply camera rotation
+        cam_xy -= cam_rot_speed;
+
+        //globe.camera.update(cam_zoom, cam_xy, cam_z);
+
+        // render globe on the canvas
+        canvas.clear();
+        globe.render_on(&mut canvas);
+
+        // print canvas to terminal
+        print_canvas(&mut canvas, &term_size, &mut stdout);
+    }
+
+    stdout.execute(cursor::Show).unwrap();
+    stdout.execute(cursor::EnableBlinking).unwrap();
+
+    terminal::disable_raw_mode().unwrap();
+    stdout.execute(terminal::Clear(ClearType::All)).unwrap();
+}
+
+/// Orients the camera so that it focuses on the given target coordinates.
+pub fn focus_target(coords: (f32, f32), xy_offset: f32, cam_xy: &mut f32, cam_z: &mut f32) {
+    let (cx, cy) = coords;
+    *cam_xy = (cx * PI) * -1. - 1.5 - xy_offset;
+    *cam_z = cy * 3. - 1.5;
+}
+
+/// Prints globe canvas to stdout.
+fn print_canvas(canvas: &mut Canvas, term_size: &(u16, u16), stdout: &mut Stdout) {
+    let (canvas_size_x, canvas_size_y) = canvas.get_size();
+    for i in 0..canvas_size_y / canvas.char_pix.1 {
+        stdout
+            .queue(terminal::Clear(terminal::ClearType::CurrentLine))
+            .unwrap();
+        for j in 0..canvas_size_x / canvas.char_pix.0 {
+            stdout.queue(Print(canvas.matrix[i][j])).unwrap();
+        }
+        stdout.queue(cursor::MoveDown(1)).unwrap();
+        stdout
+            .queue(cursor::MoveLeft((canvas_size_x / 4) as u16))
+            .unwrap();
+        stdout.flush().unwrap();
+    }
+
+    if term_size.0 / 2 > term_size.1 {
+        stdout
+            .execute(crossterm::cursor::MoveTo(
+                (canvas_size_x / canvas.char_pix.1) as u16
+                    - ((canvas_size_x / canvas.char_pix.1) / canvas.char_pix.0) as u16,
+                0,
+            ))
+            .unwrap();
+    }
 }

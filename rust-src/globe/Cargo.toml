@@ -8,3 +8,9 @@ description = "Customizable ASCII globe generator."
 keywords = ["interactive", "ASCII", "globe", "terminal"]
 readme = "README.md"
 license = "GPL-3.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+crossterm = "0.18.2"
