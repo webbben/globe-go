@@ -10,49 +10,50 @@ use std::fs::File;
 use std::io::{stdout, Read, Stdout, Write};
 use std::time::Duration;
 
-use crossterm::terminal;
 use crossterm::{
     cursor,
-    event::{poll, read, Event},
+    event::{poll, read, Event, KeyCode},
     style::Print,
     ExecutableCommand, QueueableCommand,
 };
+use crossterm::{event::MouseEvent, terminal};
 
 use crossterm::terminal::ClearType;
 
-use std::thread;
-
 #[no_mangle]
-pub extern "C" fn greet() {
-    println!("Hello from Rust! -globe");
-
+pub extern "C" fn ext_screensaver(settings_ffi: SettingsFFI) {
+    // convert to regular Settings struct
     let settings = Settings {
-        refresh_rate: 60,
-        globe_rotation_speed: 0.001, // Adjust this as needed
-        cam_rotation_speed: 0.0,     // Adjust this as needed
-        cam_zoom: 0.1,               // Adjust this as needed
-        focus_speed: 1.0,            // Adjust this as needed
-        night: false,
-        coords: (35.0, 139.0), // Adjust this as needed
+        refresh_rate: settings_ffi.refresh_rate,
+        globe_rotation_speed: settings_ffi.globe_rotation_speed,
+        cam_rotation_speed: settings_ffi.cam_rotation_speed,
+        cam_zoom: settings_ffi.cam_zoom,
+        focus_speed: settings_ffi.focus_speed,
+        night: settings_ffi.night,
+        coords: (settings_ffi.coord_x, settings_ffi.coord_y),
     };
 
     //start_screensaver(settings);
     my_screensaver(settings)
 }
 
+#[no_mangle]
+pub extern "C" fn ext_interactive(settings_ffi: SettingsFFI) {
+    // convert to regular Settings struct
+    let settings = Settings {
+        refresh_rate: settings_ffi.refresh_rate,
+        globe_rotation_speed: settings_ffi.globe_rotation_speed,
+        cam_rotation_speed: settings_ffi.cam_rotation_speed,
+        cam_zoom: settings_ffi.cam_zoom,
+        focus_speed: settings_ffi.focus_speed,
+        night: settings_ffi.night,
+        coords: (settings_ffi.coord_x, settings_ffi.coord_y),
+    };
+    start_interactive(settings)
+}
+
 fn my_screensaver(settings: Settings) {
     let mut term_size = terminal::size().unwrap();
-
-    // use config builder to create a new globe struct
-    /*
-    let mut globe = GlobeConfig::new()
-        // specify path to the texture file
-        .with_texture(EARTH_TEXTURE, None)
-        // for built-in textures try using a template
-        //.use_template(GlobeTemplate::Earth)
-        .with_camera(CameraConfig::default())
-        .build();
-    */
 
     let mut globe = GlobeConfig::new()
         //.use_template(GlobeTemplate::Earth)
@@ -70,11 +71,6 @@ fn my_screensaver(settings: Settings) {
     };
     let mut cam_xy = 0.;
     let mut cam_z = 0.;
-
-    // render the globe onto the canvas
-    //globe.render_on(&mut canvas);
-
-    // ...
 
     loop {
         if poll(Duration::from_millis(1000 / settings.refresh_rate as u64)).unwrap() {
@@ -114,7 +110,6 @@ fn my_screensaver(settings: Settings) {
             }
             println!();
         }
-        //thread::sleep(Duration::from_secs(1));
     }
 }
 
@@ -126,7 +121,7 @@ static EARTH_NIGHT_TEXTURE: &str = include_str!("../textures/earth_night.txt");
 
 /// Collection of scene settings that get passed from clap to mode processing
 /// functions.
-struct Settings {
+pub struct Settings {
     /// Refresh rate in cycles per second
     refresh_rate: usize,
     /// Initial globe rotation speed
@@ -141,6 +136,26 @@ struct Settings {
     night: bool,
     /// Initial location coordinates
     coords: (f32, f32),
+}
+
+// Settings struct that is FFI compatible
+#[repr(C)]
+pub struct SettingsFFI {
+    /// Refresh rate in cycles per second
+    refresh_rate: usize,
+    /// Initial globe rotation speed
+    globe_rotation_speed: f32,
+    /// Initial camera rotation speed
+    cam_rotation_speed: f32,
+    /// Initial camera zoom
+    cam_zoom: f32,
+    /// Target focus speed
+    focus_speed: f32,
+    /// Globe night side switch
+    night: bool,
+    /// Initial location coordinates
+    coord_x: f32,
+    coord_y: f32,
 }
 
 /// Globe texture.
@@ -750,7 +765,7 @@ fn start_screensaver(settings: Settings) {
     let mut cam_z = 0.;
 
     // set the initial coordinates
-    focus_target(settings.coords, 0., &mut cam_xy, &mut cam_z);
+    //focus_target(settings.coords, 0., &mut cam_xy, &mut cam_z);
 
     let mut globe = GlobeConfig::new()
         .use_template(GlobeTemplate::Earth)
@@ -835,4 +850,209 @@ fn print_canvas(canvas: &mut Canvas, term_size: &(u16, u16), stdout: &mut Stdout
             ))
             .unwrap();
     }
+}
+
+/// Interactive mode allows using mouse and/or keyboard to control the globe.
+fn start_interactive(settings: Settings) {
+    terminal::enable_raw_mode().unwrap();
+    let mut stdout = stdout();
+    stdout.execute(cursor::Hide).unwrap();
+    stdout.execute(cursor::DisableBlinking).unwrap();
+    stdout
+        .execute(crossterm::event::EnableMouseCapture)
+        .unwrap();
+
+    let mut term_size = terminal::size().unwrap();
+    let mut canvas = if term_size.0 > term_size.1 {
+        Canvas::new(term_size.1 * 8, term_size.1 * 8, None)
+    } else {
+        Canvas::new(term_size.0 * 4, term_size.0 * 4, None)
+    };
+
+    let mut cam_zoom = settings.cam_zoom;
+    let mut cam_xy = 0.;
+    let mut cam_z = 0.;
+
+    // set the initial coordinates
+    focus_target(settings.coords, 0., &mut cam_xy, &mut cam_z);
+
+    let mut globe = GlobeConfig::new()
+        .use_template(GlobeTemplate::Earth)
+        .with_camera(CameraConfig::new(cam_zoom, cam_xy, cam_z))
+        .display_night(settings.night)
+        .build();
+
+    let mut globe_rot_speed = settings.globe_rotation_speed / 1000.;
+    let mut cam_rot_speed = settings.cam_rotation_speed / 1000.;
+
+    let mut last_drag_pos = None;
+    let mut moving_towards_target: Option<(f32, f32)> = None;
+
+    loop {
+        if poll(Duration::from_millis(1000 / settings.refresh_rate as u64)).unwrap() {
+            match read().unwrap() {
+                Event::Key(event) => match event.code {
+                    KeyCode::Char(char) => match char {
+                        '-' => globe_rot_speed -= 0.005,
+                        '+' => globe_rot_speed += 0.005,
+                        ',' => cam_rot_speed -= 0.005,
+                        '.' => cam_rot_speed += 0.005,
+                        'n' => globe.display_night = !globe.display_night,
+                        // vim-style navigation with hjkl
+                        'h' => cam_xy += 0.1,
+                        'l' => cam_xy -= 0.1,
+                        'k' => {
+                            if cam_z < 1.5 {
+                                cam_z += 0.1;
+                            }
+                        }
+                        'j' => {
+                            if cam_z > -1.5 {
+                                cam_z -= 0.1;
+                            }
+                        }
+                        _ => break,
+                    },
+                    KeyCode::PageUp => cam_zoom += 0.1,
+                    KeyCode::PageDown => cam_zoom -= 0.1,
+                    KeyCode::Up => {
+                        if cam_z < 1.5 {
+                            cam_z += 0.1;
+                        }
+                    }
+                    KeyCode::Down => {
+                        if cam_z > -1.5 {
+                            cam_z -= 0.1;
+                        }
+                    }
+                    KeyCode::Left => cam_xy += 0.1,
+                    KeyCode::Right => cam_xy -= 0.1,
+                    KeyCode::Enter => {
+                        focus_target(settings.coords, globe.angle / 2., &mut cam_xy, &mut cam_z);
+                        // moving_towards_target = Some(settings.coords);
+                    }
+                    _ => (),
+                },
+                Event::Mouse(event) => match event {
+                    MouseEvent::Drag(_, x, y, _) => {
+                        if let Some(last) = last_drag_pos {
+                            let (x_last, y_last) = last;
+                            let x_diff = x as Float - x_last as Float;
+                            let y_diff = y as Float - y_last as Float;
+
+                            if y_diff > 0. && cam_z < 1.5 {
+                                cam_z += 0.1;
+                            } else if y_diff < 0. && cam_z > -1.5 {
+                                cam_z -= 0.1;
+                            }
+
+                            cam_xy += x_diff * PI / 30.;
+                            cam_xy += y_diff * PI / 30.;
+                        }
+                        last_drag_pos = Some((x, y))
+                    }
+                    MouseEvent::ScrollUp(..) => cam_zoom -= 0.1,
+                    MouseEvent::ScrollDown(..) => cam_zoom += 0.1,
+                    _ => last_drag_pos = None,
+                },
+                Event::Resize(width, height) => {
+                    term_size = (width, height);
+                    canvas = if width > height {
+                        Canvas::new(height * 8, height * 8, None)
+                    } else {
+                        Canvas::new(width * 4, width * 4, None)
+                    };
+                }
+            }
+        }
+
+        // apply globe rotation
+        globe.angle += globe_rot_speed;
+        cam_xy -= globe_rot_speed / 2.;
+
+        // apply camera rotation
+        cam_xy -= cam_rot_speed;
+
+        // clip camera zoom
+        if cam_zoom < 1.0 {
+            cam_zoom = 1.0;
+        }
+
+        if let Some(target_coords) = moving_towards_target {
+            if move_towards_target(
+                settings.focus_speed,
+                target_coords,
+                cam_zoom,
+                globe.angle / 2.,
+                &mut cam_xy,
+                &mut cam_z,
+                &mut cam_zoom,
+            ) {
+                moving_towards_target = None;
+            }
+        }
+
+        globe.camera.update(cam_zoom, cam_xy, cam_z);
+
+        // render globe on the canvas
+        canvas.clear();
+        globe.render_on(&mut canvas);
+
+        // print canvas to terminal
+        print_canvas(&mut canvas, &term_size, &mut stdout);
+    }
+
+    stdout.execute(cursor::Show).unwrap();
+    stdout.execute(cursor::EnableBlinking).unwrap();
+    stdout
+        .execute(crossterm::event::DisableMouseCapture)
+        .unwrap();
+
+    terminal::disable_raw_mode().unwrap();
+    stdout.execute(terminal::Clear(ClearType::All)).unwrap();
+}
+
+//TODO animate zoom
+/// Rotates the camera towards given target coordinates.
+pub fn move_towards_target(
+    speed: f32,
+    coords: (f32, f32),
+    target_zoom: f32,
+    xy_offset: f32,
+    cam_xy: &mut f32,
+    cam_z: &mut f32,
+    cam_zoom: &mut f32,
+) -> bool {
+    let (cx, cy) = coords;
+    let target_xy = (cx * PI - xy_offset) * -1. - 1.5;
+    let target_z = cy * 3. - 1.5;
+
+    let diff_xy = target_xy - *cam_xy;
+    let diff_z = target_z - *cam_z;
+
+    if diff_xy.abs() < 0.01 && diff_z.abs() < 0.01 {
+        return true;
+    }
+
+    let mut xy_move = 0.01 * speed + (diff_xy.abs() / 30. * speed);
+    if diff_xy.abs() < 0.07 {
+        xy_move = xy_move / 5.;
+    }
+    if diff_xy > 0. {
+        *cam_xy += xy_move;
+    } else if diff_xy < 0. {
+        *cam_xy -= xy_move;
+    }
+
+    let mut z_move = 0.005 * speed + (diff_z.abs() / 30. * speed);
+    if diff_z.abs() < 0.07 {
+        z_move = z_move / 5.;
+    }
+    if diff_z > 0. {
+        *cam_z += z_move;
+    } else if diff_z < 0. {
+        *cam_z -= z_move;
+    }
+
+    false
 }
