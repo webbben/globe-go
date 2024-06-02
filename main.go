@@ -1,7 +1,7 @@
 package main
 
 /*
-#cgo LDFLAGS: -L./rust-src/target/release -lglobe
+#cgo LDFLAGS: -L./bin -lglobe
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -35,8 +35,8 @@ func main() {
 		coord_x:              35,
 		coord_y:              135,
 	}
-	//Screensaver(settings)
-	Interactive(settings)
+	Screensaver(settings)
+	//Interactive(settings)
 }
 
 func Screensaver(settings C.SettingsFFI) {
