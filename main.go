@@ -24,8 +24,16 @@ void ext_interactive(SettingsFFI settings);
 */
 import "C"
 
-func main() {
-	settings := C.SettingsFFI{
+func Screensaver(settings C.SettingsFFI) {
+	C.ext_screensaver(settings)
+}
+
+func Interactive(settings C.SettingsFFI) {
+	C.ext_interactive(settings)
+}
+
+func GetDefaultSettings() C.SettingsFFI {
+	return C.SettingsFFI{
 		refresh_rate:         60,
 		globe_rotation_speed: 0.01,
 		cam_rotation_speed:   0,
@@ -35,14 +43,4 @@ func main() {
 		coord_x:              35,
 		coord_y:              135,
 	}
-	Screensaver(settings)
-	//Interactive(settings)
-}
-
-func Screensaver(settings C.SettingsFFI) {
-	C.ext_screensaver(settings)
-}
-
-func Interactive(settings C.SettingsFFI) {
-	C.ext_interactive(settings)
 }
