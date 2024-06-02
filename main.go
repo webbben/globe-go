@@ -1,4 +1,4 @@
-package main
+package globego
 
 /*
 #cgo LDFLAGS: -L./bin -lglobe
