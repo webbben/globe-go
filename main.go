@@ -21,6 +21,7 @@ typedef struct {
 // Declare the Rust functions here
 void ext_screensaver(SettingsFFI settings);
 void ext_interactive(SettingsFFI settings);
+void ext_listing(SettingsFFI settings);
 */
 import "C"
 
@@ -43,4 +44,8 @@ func GetDefaultSettings() C.SettingsFFI {
 		coord_x:              35,
 		coord_y:              135,
 	}
+}
+
+func Listing(settings C.SettingsFFI) {
+	C.ext_listing(settings)
 }

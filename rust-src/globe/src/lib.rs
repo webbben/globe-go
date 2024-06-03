@@ -52,6 +52,22 @@ pub extern "C" fn ext_interactive(settings_ffi: SettingsFFI) {
     start_interactive(settings)
 }
 
+#[no_mangle]
+pub extern "C" fn ext_listing(settings_ffi: SettingsFFI) {
+    // convert to regular Settings struct
+    let settings = Settings {
+        refresh_rate: settings_ffi.refresh_rate,
+        globe_rotation_speed: settings_ffi.globe_rotation_speed,
+        cam_rotation_speed: settings_ffi.cam_rotation_speed,
+        cam_zoom: settings_ffi.cam_zoom,
+        focus_speed: settings_ffi.focus_speed,
+        night: settings_ffi.night,
+        coords: (settings_ffi.coord_x, settings_ffi.coord_y),
+    };
+    let coords_input: Vec<&str> = vec!["35,135", "35,86", "150,-30"];
+    start_listing(settings, coords_input)
+}
+
 fn my_screensaver(settings: Settings) {
     let mut term_size = terminal::size().unwrap();
 
@@ -1055,4 +1071,132 @@ pub fn move_towards_target(
     }
 
     false
+}
+
+/// Listing mode goes through a list of location coordinates. Pressing any key
+/// triggers stepping to the next location, or if there are no more locations,
+/// exits the program.
+fn start_listing(settings: Settings, coords_input: Vec<&str>) {
+    terminal::enable_raw_mode().unwrap();
+    let mut stdout = stdout();
+    stdout.execute(cursor::Hide).unwrap();
+    stdout.execute(cursor::DisableBlinking).unwrap();
+
+    let mut term_size = terminal::size().unwrap();
+    let mut canvas = if term_size.0 > term_size.1 {
+        Canvas::new(term_size.1 * 8, term_size.1 * 8, None)
+    } else {
+        Canvas::new(term_size.0 * 4, term_size.0 * 4, None)
+    };
+
+    let mut cam_zoom = settings.cam_zoom;
+    let mut cam_xy = 0.;
+    let mut cam_z = 0.;
+
+    let mut globe = GlobeConfig::new()
+        .use_template(GlobeTemplate::Earth)
+        .with_camera(CameraConfig::new(cam_zoom, cam_xy, cam_z))
+        .display_night(settings.night)
+        .build();
+
+    let coord_list: Vec<(f32, f32)> = coords_input
+        .iter()
+        .map(|c| {
+            let split = c.split(",").collect::<Vec<&str>>();
+            if split.len() != 2 {
+                panic!("failed parsing coordinates, format: \"51.23,51.23\"");
+            }
+            (
+                split[0]
+                    .trim()
+                    .parse()
+                    .expect("failed parsing coord as float"),
+                split[1]
+                    .trim()
+                    .parse()
+                    .expect("failed parsing coord as float"),
+            )
+        })
+        .collect();
+
+    // set the initial coordinates
+    focus_target(settings.coords, 0., &mut cam_xy, &mut cam_z);
+
+    let globe_rot_speed = settings.globe_rotation_speed / 1000.;
+    let cam_rot_speed = settings.cam_rotation_speed / 1000.;
+
+    let mut current_index = 0;
+    let mut moving_towards_target: Option<(f32, f32)> = Some(coord_list[current_index]);
+
+    loop {
+        if poll(Duration::from_millis(1000 / settings.refresh_rate as u64)).unwrap() {
+            match read().unwrap() {
+                // pressing any key exists the program
+                Event::Key(key) => match key.code {
+                    KeyCode::Char(char) => match char {
+                        'c' | 'd' => break,
+                        _ => {
+                            current_index += 1;
+                            if current_index >= coord_list.len() {
+                                break;
+                            }
+                            moving_towards_target = Some(coord_list[current_index]);
+                        }
+                    },
+                    _ => {
+                        current_index += 1;
+                        if current_index >= coord_list.len() {
+                            break;
+                        }
+                        moving_towards_target = Some(coord_list[current_index]);
+                    }
+                },
+                Event::Resize(width, height) => {
+                    term_size = (width, height);
+                    canvas = if width > height {
+                        Canvas::new(height * 8, height * 8, None)
+                    } else {
+                        Canvas::new(width * 4, width * 4, None)
+                    };
+                }
+                Event::Mouse(_) => (),
+            }
+        }
+
+        // apply globe rotation
+        globe.angle += globe_rot_speed;
+        cam_xy -= globe_rot_speed / 2.;
+
+        // apply camera rotation
+        cam_xy -= cam_rot_speed;
+
+        if let Some(target_coords) = moving_towards_target {
+            if move_towards_target(
+                settings.focus_speed,
+                target_coords,
+                cam_zoom,
+                globe.angle / 2.,
+                &mut cam_xy,
+                &mut cam_z,
+                &mut cam_zoom,
+            ) {
+                moving_towards_target = None;
+            }
+        }
+
+        globe.camera.update(cam_zoom, cam_xy, cam_z);
+
+        // render globe on the canvas
+        canvas.clear();
+        globe.render_on(&mut canvas);
+
+        // print canvas to terminal
+        print_canvas(&mut canvas, &term_size, &mut stdout);
+    }
+
+    stdout.execute(cursor::Show).unwrap();
+    stdout.execute(cursor::EnableBlinking).unwrap();
+
+    terminal::disable_raw_mode().unwrap();
+    stdout.execute(terminal::Clear(ClearType::All)).unwrap();
 }
